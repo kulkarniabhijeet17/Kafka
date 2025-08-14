@@ -1,0 +1,8 @@
+# Ignore compiled binaries and build output
+*.class
+*.jar
+*.classpath
+*.project
+*.prefs
+target/
+build/
