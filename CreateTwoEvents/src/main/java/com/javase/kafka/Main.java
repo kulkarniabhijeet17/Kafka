@@ -1,51 +1,89 @@
 package com.javase.kafka;
 
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Properties;
 
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.Serdes;
+
 public class Main {
 	public static void main(String[] args) {
 		// Configure Consumer
-		Properties consumerProps = new Properties();
-		consumerProps.put("bootstrap.servers", "localhost:9092");
-		consumerProps.put("group.id", "channel-splitter-group");
-		consumerProps.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
-		consumerProps.put("value.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+		Properties consumerProps = getKafkaConsumerProperties();
 
 		KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps);
 		consumer.subscribe(Collections.singletonList("input-topic"));
 
 		// Configure Producer
-		Properties producerProps = new Properties();
-		producerProps.put("bootstrap.servers", "localhost:9092");
-		producerProps.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-		producerProps.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+		Properties producerProps = getKafkaProducerProperties();
 
 		KafkaProducer<String, String> producer = new KafkaProducer<>(producerProps);
 
-		while (true) {
-			ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
-			records.forEach(record -> {
-				String value = record.value();
-				if (value.contains("\"channel\":\"Both\"")) {
-					// Split into sms and email records
-					String smsRecord = value.replace("\"channel\":\"Both\"", "\"channel\":\"sms\"");
-					String emailRecord = value.replace("\"channel\":\"Both\"", "\"channel\":\"email\"");
+		try {
+			while (true) {
+				ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
+				records.forEach(record -> {
+					String value = record.value();
+					if (value.contains("\"channel\":\"Both\"")) {
+						// Split into sms and email records
+						String smsRecord = value.replace("\"channel\":\"Both\"", "\"channel\":\"sms\"");
+						String emailRecord = value.replace("\"channel\":\"Both\"", "\"channel\":\"email\"");
 
-					// Send to output topic(s)
-					producer.send(new ProducerRecord<>("output-topic", record.key(), smsRecord));
-					producer.send(new ProducerRecord<>("output-topic", record.key(), emailRecord));
-				} else {
+						// Send to output topic(s)
+						producer.send(new ProducerRecord<>("output-topic", record.key(), smsRecord));
+						producer.send(new ProducerRecord<>("output-topic", record.key(), emailRecord));
+					}
 					// Forward as-is
 					producer.send(new ProducerRecord<>("output-topic", record.key(), value));
-				}
-			});
+				});
+			}
+		} finally {
+			consumer.close();
+			producer.close();
 		}
+	}
+
+	private static Properties getKafkaConsumerProperties() {
+		Properties props = loadKafkaProperties();
+
+		Properties consumerProps = new Properties();
+		consumerProps.putIfAbsent(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, props.getProperty("bootstrap.servers"));
+		consumerProps.putIfAbsent(ConsumerConfig.GROUP_ID_CONFIG, props.getProperty("group.id"));
+		consumerProps.putIfAbsent(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, Serdes.String().getClass());
+		consumerProps.putIfAbsent(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, Serdes.String().getClass());
+		consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+		consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false"); // Manual offset management
+
+		return consumerProps;
+	}
+
+	private static Properties getKafkaProducerProperties() {
+		Properties props = loadKafkaProperties();
+
+		Properties producerProps = new Properties();
+		producerProps.putIfAbsent(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, props.getProperty("bootstrap.servers"));
+		producerProps.putIfAbsent(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, Serdes.String().getClass());
+		producerProps.putIfAbsent(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, Serdes.String().getClass());
+
+		return producerProps;
+	}
+
+	private static Properties loadKafkaProperties() {
+		Properties props = new Properties();
+		try {
+			InputStream input = Main.class.getClassLoader().getResourceAsStream("kafka.properties");
+			props.load(input);
+		} catch (IOException ex) {
+			System.out.println("Exception occurred: " + ex.getMessage());
+		}
+
+		return props;
 	}
 }
